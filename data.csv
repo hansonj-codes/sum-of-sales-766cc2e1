@@ -1,0 +1,15 @@
+product,region,sales
+Laptop,North,1500.50
+Mouse,North,25.00
+Keyboard,North,75.25
+Laptop,South,1200.00
+Mouse,South,30.50
+Monitor,South,350.00
+Laptop,East,1800.75
+Keyboard,East,80.00
+Mouse,East,28.25
+Monitor,East,425.50
+Laptop,West,950.00
+Keyboard,West,65.00
+Monitor,West,380.00
+Mouse,West,22.50
