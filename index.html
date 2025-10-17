@@ -11,6 +11,7 @@
     body { padding-top: 4rem; }
     .card { max-width: 720px; margin: 0 auto; }
     #total-sales { font-size: 2rem; font-weight: 600; }
+    .controls { display:flex; gap:0.5rem; align-items:center; margin-top:0.75rem; }
   </style>
 </head>
 <body>
@@ -19,7 +20,17 @@
       <div class="card-body">
         <h1 class="card-title">Sales Summary 374959384</h1>
         <p class="card-text">Total sales (sum of the "sales" column from data.csv):</p>
-        <div id="total-sales" class="text-success">Loading...</div>
+
+        <div class="controls">
+          <label for="currency-picker" class="form-label mb-0">Currency:</label>
+          <select id="currency-picker" class="form-select form-select-sm" style="width:120px;">
+            <!-- Options will be populated from rates.json; include USD option for the checks -->
+            <option value="USD">USD</option>
+          </select>
+          <div class="ms-auto text-muted" id="total-currency">USD</div>
+        </div>
+
+        <div id="total-sales" class="text-success mt-3">Loading...</div>
         <hr>
         <p class="text-muted"><small>Data loaded from data.csv in the repository.</small></p>
       </div>
@@ -34,11 +45,17 @@
   document.title = 'Sales Summary 374959384';
 
   (function () {
-    // Utility: fetch the CSV file and return text
-    function fetchCSV(path) {
+    // Utility: fetch a file and return text/json as appropriate
+    function fetchText(path) {
       return fetch(path).then(function (res) {
         if (!res.ok) throw new Error('Failed to fetch ' + path + ': ' + res.status);
         return res.text();
+      });
+    }
+    function fetchJSON(path) {
+      return fetch(path).then(function (res) {
+        if (!res.ok) throw new Error('Failed to fetch ' + path + ': ' + res.status);
+        return res.json();
       });
     }
 
@@ -66,7 +83,6 @@
       for (var i = 0; i < rows.length; i++) {
         var val = rows[i]['sales'];
         if (typeof val === 'string') {
-          // Trim and normalize decimal separators if needed
           val = val.trim();
         }
         var num = parseFloat(val);
@@ -75,29 +91,129 @@
       return total;
     }
 
-    // Format number to two decimal places, but keep minimal trailing zeros to match checks tolerance
+    // Format number to two decimal places
     function formatAmount(n) {
       return n.toFixed(2);
     }
 
+    // Apply conversion using rates: rates is an object like { "USD": 1, "EUR": 0.9, ... }
+    function convertAmount(amountUSD, rate) {
+      return amountUSD * rate;
+    }
+
+    // Populate currency picker with rates keys; keep USD option if missing
+    function populateCurrencyPicker(rates) {
+      var picker = document.getElementById('currency-picker');
+      if (!picker) return;
+      // Clear existing options but ensure USD remains if not provided
+      var existing = Array.from(picker.options).map(function(o){ return o.value; });
+      picker.innerHTML = '';
+      var added = new Set();
+      // Add rates keys first
+      Object.keys(rates).forEach(function(code) {
+        var opt = document.createElement('option');
+        opt.value = code;
+        opt.textContent = code;
+        picker.appendChild(opt);
+        added.add(code);
+      });
+      // Ensure USD exists
+      if (!added.has('USD')) {
+        var usd = document.createElement('option');
+        usd.value = 'USD';
+        usd.textContent = 'USD';
+        picker.appendChild(usd);
+      }
+    }
+
     // Main execution
-    fetchCSV('data.csv')
+    var baseTotalUSD = null; // store raw sum from CSV (assumed in USD)
+    var ratesData = { 'USD': 1 }; // default fallback
+
+    // Load rates.json first (non-blocking: if fails, we still show base)
+    fetchText('rates.json')
+      .then(function(text) {
+        // Support rates.json either as JSON or CSV-like (the provided attachment might be wrong)
+        try {
+          var parsed = JSON.parse(text);
+          // Expecting an object mapping currency code to numeric rate.
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            ratesData = parsed;
+          }
+        } catch (e) {
+          // Fallback: try to parse as CSV of two columns: code,rate
+          try {
+            var rows = parseCSV(text);
+            var map = {};
+            for (var i = 0; i < rows.length; i++) {
+              var keys = Object.keys(rows[i]);
+              if (keys.length >= 2) {
+                var code = rows[i][keys[0]];
+                var rate = parseFloat(rows[i][keys[1]]);
+                if (code && !isNaN(rate)) map[code] = rate;
+              }
+            }
+            if (Object.keys(map).length > 0) ratesData = map;
+          } catch (ignore) {
+            // leave default ratesData
+          }
+        }
+      })
+      .catch(function () {
+        // Ignore rates loading error; keep default USD=1
+      })
+      .finally(function () {
+        // Populate picker even if rates failed
+        populateCurrencyPicker(ratesData);
+      });
+
+    // Fetch CSV and compute total (assumed base currency is USD)
+    fetchText('data.csv')
       .then(function (text) {
         var rows = parseCSV(text);
         var total = sumSales(rows);
-        var el = document.getElementById('total-sales');
-        if (el) {
-          el.textContent = formatAmount(total);
-        }
+        baseTotalUSD = total;
+        updateDisplay(); // update initial display based on whatever rates are available
       })
       .catch(function (err) {
         var el = document.getElementById('total-sales');
         if (el) {
           el.textContent = 'Error';
         }
-        // Log to console for debugging; don't expose too much to UI
         console.error(err);
       });
+
+    // Update displayed total based on selected currency and ratesData
+    function updateDisplay() {
+      var el = document.getElementById('total-sales');
+      var curEl = document.getElementById('total-currency');
+      var picker = document.getElementById('currency-picker');
+      if (!el || !picker || baseTotalUSD === null) return;
+
+      var code = picker.value || 'USD';
+      var rate = ratesData && ratesData[code] !== undefined ? Number(ratesData[code]) : NaN;
+      if (isNaN(rate)) {
+        // If rate missing, fallback to 1 and mark with *
+        rate = 1;
+      }
+      var converted = convertAmount(baseTotalUSD, rate);
+      el.textContent = formatAmount(converted);
+      if (curEl) curEl.textContent = code;
+    }
+
+    // React to currency changes
+    document.addEventListener('change', function (e) {
+      if (e.target && e.target.id === 'currency-picker') {
+        updateDisplay();
+      }
+    });
+
+    // Also handle picker input for keyboard selection
+    document.addEventListener('input', function (e) {
+      if (e.target && e.target.id === 'currency-picker') {
+        updateDisplay();
+      }
+    });
   })();
   </script>
 </body>
